@@ -3,6 +3,11 @@
 import os
 import sys
 
-print('Hello Nickey')
-print('Hello World')
-print('This is a online commit')
+
+
+
+
+if __name__ == '__main__':
+    print('Hello Nickey')
+    print('This is a online commit')
+    print('OK')
