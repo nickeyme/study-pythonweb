@@ -115,6 +115,11 @@ def datetime_filter(t):
     dt = datetime.fromtimestamp(t)
     return u'%s年%s月%s日' % (dt.year, dt.month, dt.day)
 
+'''
+middleware（中间件）是一种拦截器，一个URL在被某个函数处理前，可以经过一系列的middleware的处理。
+一个middleware可以改变URL的输入、输出，甚至可以决定不继续处理而直接返回。
+middleware的用处就在于把通用的功能从每个URL处理函数中拿出来，集中放到一个地方。
+'''
 async def init(loop):
     await orm.create_pool(loop=loop, host='127.0.0.1', port=3306, user='python', password='password', db='pythonweb')
     app = web.Application(loop=loop, middlewares=[

@@ -2,6 +2,7 @@
 
 '''
 JSON API definition.
+自定义的异常处理
 '''
 
 import json, logging, inspect, functools

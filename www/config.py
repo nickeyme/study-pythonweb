@@ -9,6 +9,7 @@ import config_default
 class Dict(dict):
     '''
     Simple dict but support access as x.y style.
+    一般的字典类，但是支持 x.y 的格式
 
     example:
     D = Dict(a='1', b='2', c='3')
@@ -56,7 +57,7 @@ try:
 except ImportError:
     pass
 
-#实测相同
+# toDict前后的数据 实测相同
 print(configs)
 configs = toDict(configs)
 print(configs)
