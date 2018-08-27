@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
 
+'''
+web frame 框架模块
+'''
+
 import asyncio, os, inspect, logging, functools
 
 from urllib import parse
