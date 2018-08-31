@@ -8,7 +8,7 @@ import re, time, json, logging, hashlib, base64, asyncio
 from coroweb import get, post
 from models import User, Comment, Blog, next_id
 from config import configs
-from apis import APIValueError, APIResourceNotFoundError
+from apis import Page, APIValueError, APIResourceNotFoundError
 
 '''
 @get('/')
@@ -33,9 +33,7 @@ def check_admin(request):
         raise APIPermissionError()
 
 def user2cookie(user, max_age):
-    '''
-    Generate cookie str by user.
-    '''
+    ''' Generate cookie str by user. '''
     # build cookie string by: id-expires-sha1
     expires = str(int(time.time() + max_age))
     s = '%s-%s-%s-%s' % (user.id, user.passwd, expires, _COOKIE_KEY)
@@ -157,14 +155,14 @@ async def api_register_user(*, email, name, passwd):
 #------------------------------博客相关页面-----------------------------
 
 def get_page_index(page_str):
-    	p = 1
-	try:
-		p = int(page_str)
-	except ValueError as e:
-		pass
-	if p < 1:
-		p = 1
-	return p
+    p = 1
+    try:
+        p = int(page_str)
+    except ValueError as e:
+        pass
+    if p < 1:
+        p = 1
+    return p
 
 #访问某篇博客
 @get('/api/blogs/{id}')
@@ -175,53 +173,61 @@ async def api_get_blog(*, id):
 #获取某篇博客具体内容页面（包括评论等）
 @get('/blog/{id}')
 async def get_blog(id):
-	logging.info('blog_id: %s' % id)
-	blog = await Blog.find(id)
-	comments = await Comment.findAll('blog_id=?', [id], orderBy='created_at desc')
-	for c in comments:
-		c.html_content = text2html(c.content)
-	# markdown将txt转化成为html格式
-	blog.html_content = markdown2.markdown(blog.content)
-	return {
-		'__template__': 'blog.html',
-		'blog': blog,
-		'comments': comments
-	}
+    logging.info('blog_id: %s' % id)
+    blog = await Blog.find(id)
+    comments = await Comment.findAll('blog_id=?', [id], orderBy='created_at desc')
+    for c in comments:
+        c.html_content = text2html(c.content)
+    # markdown将txt转化成为html格式
+    blog.html_content = markdown2.markdown(blog.content)
+    return {
+        '__template__': 'blog.html',
+        'blog': blog,
+        'comments': comments
+    }
+
+#博客列表页 分页显示博客
+@get('/manage/blogs')
+def manage_blogs(*, page='1'):
+    return {
+        '__template__': 'manage_blogs.html',
+        'page_index': get_page_index(page)
+    }
 
 #创建博客页，action ===> /api/blogs
 @get('/manage/blogs/create')
 def manage_create_blog():
-	return {
-		'__template__': 'manage_blog_edit.html',
-		'id': '',
-		'action': '/api/blogs'
-	}
+    return {
+        '__template__': 'manage_blog_edit.html',
+        'id': '',
+        'action': '/api/blogs'
+    }
 
 #获取博客
 @get('/api/blogs')
 async def api_blogs(*, page='1'):
-	page_index = get_page_index(page)
-	num = await Blog.findNumber('count(id)')
-	p = Page(num, page_index)
-	if num == 0:
-		return dict(page=p, blogs=())
-	blogs = await Blog.findAll(orderBy='created_at desc', limit=(p.offset, p.limit))
-	return dict(page=p, blogs=blogs)
+    page_index = get_page_index(page)
+    num = await Blog.findNumber('count(id)')
+    p = Page(num, page_index)
+    if num == 0:
+        return dict(page=p, blogs=())
+    blogs = await Blog.findAll(orderBy='created_at desc', limit=(p.offset, p.limit))
+    return dict(page=p, blogs=blogs)
 
 #创建博客，由/manage/blogs 中action跳转处理
 @post('/api/blogs')
 async def api_create_blog(request, *, name, summary, content):
-	check_admin(request)
-	if not name or not name.strip():
-		raise APIValueError('name', 'name cannot be empty.')
-	if not summary or not summary.strip():
-		raise APIValueError('summary', 'summary cannot be empty.')
-	if not content or not content.strip():
-		raise APIValueError('content', 'content cannot be empty.')
-	blog = Blog(user_id=request.__user__.id, user_name=request.__user__.name, user_image=request.__user__.image,
-		name=name.strip(), summary=summary.strip(), content=content.strip())
-	await blog.save()
-	return blog
+    check_admin(request)
+    if not name or not name.strip():
+        raise APIValueError('name', 'name cannot be empty.')
+    if not summary or not summary.strip():
+        raise APIValueError('summary', 'summary cannot be empty.')
+    if not content or not content.strip():
+        raise APIValueError('content', 'content cannot be empty.')
+    blog = Blog(user_id=request.__user__.id, user_name=request.__user__.name, user_image=request.__user__.image,
+        name=name.strip(), summary=summary.strip(), content=content.strip())
+    await blog.save()
+    return blog
 
 #------------------------------后端API-----------------------------
 
