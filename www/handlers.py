@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 
-
 ''' url handlers '''
 
 from aiohttp import web
@@ -10,15 +9,7 @@ from models import User, Comment, Blog, next_id
 from config import configs
 from apis import Page, APIValueError, APIResourceNotFoundError
 
-'''
-@get('/')
-async def index(request):
-    users = await User.findAll()
-    return {
-        '__template__': 'test.html',
-        'users': users
-    }
-'''
+'''-----思路： 前端页面带有模板，具体操作响应用后端API处理，然后返回响应的页面'''
 
 #正则匹配邮箱 SHA1
 _RE_EMAIL = re.compile(r'^[a-z0-9\.\-\_]+\@[a-z0-9\-\_]+(\.[a-z0-9\-\_]+){1,4}$')
@@ -28,6 +19,9 @@ COOKIE_NAME = 'websession'
 #cookie key
 _COOKIE_KEY = configs.session.secret # x.y的形式访问
 
+#------------------------------功能函数相关-----------------------------
+
+# 检查当前用户是否已登录 并且为管理员用户
 def check_admin(request):
     if request.__user__ is None or not request.__user__.admin:
         raise APIPermissionError()
@@ -65,8 +59,40 @@ async def cookie2user(cookie_str):
         logging.exception(e)
         return None
 
-#------------------------------主接口相关-----------------------------
+def get_page_index(page_str):
+    p = 1
+    try:
+        p = int(page_str)
+    except ValueError as e:
+        pass
+    if p < 1:
+        p = 1
+    return p
 
+# text文本到html格式的转换 特殊符号转换
+def text2html(text):
+    lines = map(lambda s: '<p>%s</p>' % s.replace('&', '&amp;').replace('<', '&lt;').\
+            replace('>', '&gt;'), filter(lambda s: s.strip() != '', text.split('\n')))
+    return ''.join(lines)
+
+#------------------------------注册/登录/注销-----------------------------
+
+#注册页面 >> /api/users
+@get('/register')
+def register():
+    return {
+        '__template__': 'register.html'
+    }
+
+#登录页面 >> /api/authenticate
+@get('/signin')
+def signin():
+    return {
+        '__template__': 'signin.html'
+    }
+
+'''
+# Test
 @get('/')
 def index(request):
     summary = 'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
@@ -79,20 +105,22 @@ def index(request):
         '__template__': 'blogs.html',
         'blogs': blogs
     }
+'''
 
-#注册页面
-@get('/register')
-def register():
-    return {
-        '__template__': 'register.html'
-    }
-
-#登录页面
-@get('/signin')
-def signin():
-    return {
-        '__template__': 'signin.html'
-    }
+@get('/')
+async def index(*, page='1'):
+	page_index = get_page_index(page)
+	num = await Blog.findNumber('count(id)') 
+	page = Page(num)
+	if num == 0:
+		blogs = []
+	else:
+		blogs = await Blog.findAll(orderBy='created_at desc', limit=(page.offset, page.limit))
+	return {
+		'__template__': 'blogs.html',
+		'blogs': blogs,
+		'page':page
+	}
 
 # 用户登录接口
 @post('/api/authenticate')
@@ -127,46 +155,34 @@ def signout(request):
     r = web.HTTPFound(referer or '/')
     r.set_cookie(COOKIE_NAME, '-deleted-', max_age=0, httponly=True)
     logging.info('user signed out.')
+    manage_blogs()
+    return r
+
+#注册用户接口
+@post('/api/users')
+async def api_register_user(*, email, name, passwd):
+    if not name or not name.strip():
+        raise APIValueError('name')
+    if not email or not _RE_EMAIL.match(email):
+        raise APIValueError('email')
+    if not passwd or not _RE_SHA1.match(passwd):
+        raise APIValueError('passwd')
+    users = await User.findAll('email=?', [email])
+    if len(users) > 0:
+        raise APIError('register:failed', 'email', 'Email is already in use.')
+    uid = next_id()
+    sha1_passwd = '%s:%s' % (uid, passwd)
+    user = User(id=uid, name=name.strip(), email=email, passwd=hashlib.sha1(sha1_passwd.encode('utf-8')).hexdigest(), image='http://www.gravatar.com/avatar/%s?d=mm&s=120' % hashlib.md5(email.encode('utf-8')).hexdigest())
+    await user.save()
+    # make session cookie:
+    r = web.Response()
+    r.set_cookie(COOKIE_NAME, user2cookie(user, 86400), max_age=86400, httponly=True)
+    user.passwd = '******'
+    r.content_type = 'application/json'
+    r.body = json.dumps(user, ensure_ascii=False).encode('utf-8')
     return r
 
 #------------------------------博客相关页面-----------------------------
-
-def get_page_index(page_str):
-    p = 1
-    try:
-        p = int(page_str)
-    except ValueError as e:
-        pass
-    if p < 1:
-        p = 1
-    return p
-
-#访问某篇博客
-@get('/api/blogs/{id}')
-async def api_get_blog(*, id):
-    blog = await Blog.find(id)
-    return blog
-
-def text2html(text):
-    lines = map(lambda s: '<p>%s</p>' % s.replace('&', '&amp;').replace('<', '&lt;').\
-            replace('>', '&gt;'), filter(lambda s: s.strip() != '', text.split('\n')))
-    return ''.join(lines)
-
-#获取某篇博客具体内容页面（包括评论等）
-@get('/blog/{id}')
-async def get_blog(id):
-    logging.info('blog_id: %s' % id)
-    blog = await Blog.find(id)
-    comments = await Comment.findAll('blog_id=?', [id], orderBy='created_at desc')
-    for c in comments:
-        c.html_content = text2html(c.content)
-    # markdown将txt转化成为html格式
-    blog.html_content = markdown2.markdown(blog.content)
-    return {
-        '__template__': 'blog.html',
-        'blog': blog,
-        'comments': comments
-    }
 
 #博客列表页 分页显示博客
 @get('/manage/blogs')
@@ -183,6 +199,28 @@ def manage_create_blog():
         '__template__': 'manage_blog_edit.html',
         'id': '',
         'action': '/api/blogs'
+    }
+
+#访问某篇博客
+@get('/api/blogs/{id}')
+async def api_get_blog(*, id):
+    blog = await Blog.find(id)
+    return blog
+
+#获取某篇博客具体内容页面（包括评论等）
+@get('/blog/{id}')
+async def get_blog(id):
+    logging.info('blog_id: %s' % id)
+    blog = await Blog.find(id)
+    comments = await Comment.findAll('blog_id=?', [id], orderBy='created_at desc')
+    for c in comments:
+        c.html_content = text2html(c.content)
+    # markdown将txt转化成为html格式
+    blog.html_content = markdown2.markdown(blog.content)
+    return {
+        '__template__': 'blog.html',
+        'blog': blog,
+        'comments': comments
     }
 
 #获取博客
@@ -251,15 +289,6 @@ async def api_update_blog(id, request, *, name, summary, content):
 WebAPI Test：Web接口编写，用于终端返回数据等操作
 '''
 
-'''
-@get('/api/users')
-async def api_get_users():
-    users = await User.findAll(orderBy='created_at desc')
-    for u in users:
-        u.passwd = '******'
-    return dict(users=users)
-'''
-
 @get('/manage/users')
 def manage_users(*, page='1'):
     return {
@@ -279,26 +308,63 @@ async def api_get_users(*, page='1'):
         u.passwd = '******'
     return dict(page=p, users=users)
 
-#注册用户接口
-@post('/api/users')
-async def api_register_user(*, email, name, passwd):
-    if not name or not name.strip():
-        raise APIValueError('name')
-    if not email or not _RE_EMAIL.match(email):
-        raise APIValueError('email')
-    if not passwd or not _RE_SHA1.match(passwd):
-        raise APIValueError('passwd')
-    users = await User.findAll('email=?', [email])
-    if len(users) > 0:
-        raise APIError('register:failed', 'email', 'Email is already in use.')
-    uid = next_id()
-    sha1_passwd = '%s:%s' % (uid, passwd)
-    user = User(id=uid, name=name.strip(), email=email, passwd=hashlib.sha1(sha1_passwd.encode('utf-8')).hexdigest(), image='http://www.gravatar.com/avatar/%s?d=mm&s=120' % hashlib.md5(email.encode('utf-8')).hexdigest())
-    await user.save()
-    # make session cookie:
-    r = web.Response()
-    r.set_cookie(COOKIE_NAME, user2cookie(user, 86400), max_age=86400, httponly=True)
-    user.passwd = '******'
-    r.content_type = 'application/json'
-    r.body = json.dumps(user, ensure_ascii=False).encode('utf-8')
-    return r
+#删除评论，需要检查是否有权限
+@post('/api/users/{id}/delete')
+async def api_delete_users(id, request):
+    check_admin(request)
+    user = await User.find(id)
+    if user is None:
+        raise APIResourceNotFoundError('User')
+    await user.delete()
+    return dict(id=id)
+
+#------------------------------评论相关-----------------------------
+
+#返回重定向url ===> manage/comments
+@get('/manage')
+def manage():
+    return 'redirect:/manage/comments'
+
+#管理评论列表页
+@get('/manage/comments')
+def manage_comments(*, page='1'):
+    return{
+        '__template__': 'manage_comments.html',
+        'page_index': get_page_index(page)
+    }
+
+#获取评论
+@get('/api/comments')
+async def api_comments(*, page='1'):
+    page_index = get_page_index(page)
+    num = await Comment.findNumber('count(id)')
+    p = Page(num, page_index)
+    if num == 0:
+        return dict(page=p, comments=())
+    comments = await Comment.findAll(orderBy='created_at desc', limit=(p.offset, p.limit))
+    return dict(page=p, comments=comments)
+
+#删除评论，需要检查是否有权限
+@post('/api/comments/{id}/delete')
+async def api_delete_comments(id, request):
+    check_admin(request)
+    c = await Comment.find(id)
+    if c is None:
+        raise APIResourceNotFoundError('Comment')
+    await c.delete()
+    return dict(id=id)
+
+#创建某篇博客的评论
+@post('/api/blogs/{id}/comments')
+async def api_create_comment(id, request, *, content):
+    user = request.__user__
+    if user is None:
+        raise APIPermissionError('please signin first.')
+    if not content or not content.strip():
+        raise APIValueError('content')
+    blog = await Blog.find(id)
+    if blog is None:
+        raise APIResourceNotFoundError('Blog')
+    comment = Comment(blog_id=blog.id, user_id=user.id, user_name=user.name, user_image=user.image, content=content.strip())
+    await comment.save()
+    return comment
