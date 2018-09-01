@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 
 
-' url handlers '
+''' url handlers '''
 
 from aiohttp import web
-import re, time, json, logging, hashlib, base64, asyncio
+import re, time, json, logging, hashlib, base64, asyncio, markdown2
 from coroweb import get, post
 from models import User, Comment, Blog, next_id
 from config import configs
@@ -43,7 +43,6 @@ def user2cookie(user, max_age):
 #cookie转user
 async def cookie2user(cookie_str):
     ''' 如果cookie有效则解析cookie并加载出user '''
-
     if not cookie_str:
         return None
     try:
@@ -65,6 +64,8 @@ async def cookie2user(cookie_str):
     except Exception as e:
         logging.exception(e)
         return None
+
+#------------------------------主接口相关-----------------------------
 
 @get('/')
 def index(request):
@@ -128,30 +129,6 @@ def signout(request):
     logging.info('user signed out.')
     return r
 
-#注册用户接口
-@post('/api/users')
-async def api_register_user(*, email, name, passwd):
-    if not name or not name.strip():
-        raise APIValueError('name')
-    if not email or not _RE_EMAIL.match(email):
-        raise APIValueError('email')
-    if not passwd or not _RE_SHA1.match(passwd):
-        raise APIValueError('passwd')
-    users = await User.findAll('email=?', [email])
-    if len(users) > 0:
-        raise APIError('register:failed', 'email', 'Email is already in use.')
-    uid = next_id()
-    sha1_passwd = '%s:%s' % (uid, passwd)
-    user = User(id=uid, name=name.strip(), email=email, passwd=hashlib.sha1(sha1_passwd.encode('utf-8')).hexdigest(), image='http://www.gravatar.com/avatar/%s?d=mm&s=120' % hashlib.md5(email.encode('utf-8')).hexdigest())
-    await user.save()
-    # make session cookie:
-    r = web.Response()
-    r.set_cookie(COOKIE_NAME, user2cookie(user, 86400), max_age=86400, httponly=True)
-    user.passwd = '******'
-    r.content_type = 'application/json'
-    r.body = json.dumps(user, ensure_ascii=False).encode('utf-8')
-    return r
-
 #------------------------------博客相关页面-----------------------------
 
 def get_page_index(page_str):
@@ -169,6 +146,11 @@ def get_page_index(page_str):
 async def api_get_blog(*, id):
     blog = await Blog.find(id)
     return blog
+
+def text2html(text):
+    lines = map(lambda s: '<p>%s</p>' % s.replace('&', '&amp;').replace('<', '&lt;').\
+            replace('>', '&gt;'), filter(lambda s: s.strip() != '', text.split('\n')))
+    return ''.join(lines)
 
 #获取某篇博客具体内容页面（包括评论等）
 @get('/blog/{id}')
@@ -229,10 +211,46 @@ async def api_create_blog(request, *, name, summary, content):
     await blog.save()
     return blog
 
-#------------------------------后端API-----------------------------
+#删除某篇日志 manage_blogs >>
+@post('/api/blogs/{id}/delete')
+async def api_delete_blog(request, *, id):
+    check_admin(request)
+    blog = await Blog.find(id)
+    await blog.delete()
+    return dict(id=id)
+
+#编辑博客页 action >> /api/blogs/%s
+@get('/manage/blogs/edit')
+def manage_edit_blog(*, id):
+    return {
+        '__template__': 'manage_blog_edit.html',
+        'id': id,
+        'action': '/api/blogs/%s' % id
+    }
+
+#修改某篇日志 manage_blogs >>
+@post('/api/blogs/{id}')
+async def api_update_blog(id, request, *, name, summary, content):
+    check_admin(request)
+    blog = await Blog.find(id)
+    if not name or not name.strip():
+        raise APIValueError('name', 'name cannot be empty.')
+    if not summary or not summary.strip():
+        raise APIValueError('summary', 'summary cannot be empty.')
+    if not content or not content.strip():
+        raise APIValueError('content', 'content cannot be empty.')
+    blog.name = name.strip()
+    blog.summary = summary.strip()
+    blog.content = content.strip()
+    await blog.update()
+    return blog
+
+#------------------------------用户相关页面-----------------------------
 
 '''
 WebAPI Test：Web接口编写，用于终端返回数据等操作
+'''
+
 '''
 @get('/api/users')
 async def api_get_users():
@@ -240,3 +258,47 @@ async def api_get_users():
     for u in users:
         u.passwd = '******'
     return dict(users=users)
+'''
+
+@get('/manage/users')
+def manage_users(*, page='1'):
+    return {
+        '__template__': 'manage_users.html',
+        'page_index': get_page_index(page)
+    }
+
+@get('/api/users')
+async def api_get_users(*, page='1'):
+    page_index = get_page_index(page)
+    num = await User.findNumber('count(id)')
+    p = Page(num, page_index)
+    if num == 0:
+        return dict(page=p, users=())
+    users = await User.findAll(orderBy='created_at desc', limit=(p.offset, p.limit))
+    for u in users:
+        u.passwd = '******'
+    return dict(page=p, users=users)
+
+#注册用户接口
+@post('/api/users')
+async def api_register_user(*, email, name, passwd):
+    if not name or not name.strip():
+        raise APIValueError('name')
+    if not email or not _RE_EMAIL.match(email):
+        raise APIValueError('email')
+    if not passwd or not _RE_SHA1.match(passwd):
+        raise APIValueError('passwd')
+    users = await User.findAll('email=?', [email])
+    if len(users) > 0:
+        raise APIError('register:failed', 'email', 'Email is already in use.')
+    uid = next_id()
+    sha1_passwd = '%s:%s' % (uid, passwd)
+    user = User(id=uid, name=name.strip(), email=email, passwd=hashlib.sha1(sha1_passwd.encode('utf-8')).hexdigest(), image='http://www.gravatar.com/avatar/%s?d=mm&s=120' % hashlib.md5(email.encode('utf-8')).hexdigest())
+    await user.save()
+    # make session cookie:
+    r = web.Response()
+    r.set_cookie(COOKIE_NAME, user2cookie(user, 86400), max_age=86400, httponly=True)
+    user.passwd = '******'
+    r.content_type = 'application/json'
+    r.body = json.dumps(user, ensure_ascii=False).encode('utf-8')
+    return r
