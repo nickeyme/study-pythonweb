@@ -66,6 +66,8 @@ async def data_factory(app, handler):
         return (await handler(request))
     return parse_data
 
+# 把当前用户绑定到request上，并对URL/manage/进行拦截，检查当前用户是否是管理员身份
+# 不是管理员用户则跳转 /signin 页面，否则继续处理当前请求
 async def auth_factory(app, handler):
     async def auth(request):
         logging.info('check user: %s %s' % (request.method, request.path))
@@ -104,6 +106,7 @@ async def response_factory(app, handler):
                 resp.content_type = 'application/json;charset=utf-8'
                 return resp
             else:
+                r['__user__'] = request.__user__ # 这行非常重要 登录后记录用户登录的状态
                 resp = web.Response(body=app['__templating__'].get_template(template).render(**r).encode('utf-8'))
                 resp.content_type = 'text/html;charset=utf-8'
                 return resp
