@@ -9,7 +9,7 @@ from models import User, Comment, Blog, next_id
 from config import configs
 from apis import Page, APIValueError, APIResourceNotFoundError
 
-'''-----思路： 前端页面带有模板，具体操作响应用后端API处理，然后返回响应的页面'''
+'''思路：前端页面带有模板，具体操作响应用后端API处理，然后返回响应的页面'''
 
 #正则匹配邮箱 SHA1
 _RE_EMAIL = re.compile(r'^[a-z0-9\.\-\_]+\@[a-z0-9\-\_]+(\.[a-z0-9\-\_]+){1,4}$')

@@ -57,8 +57,8 @@ try:
 except ImportError:
     pass
 
-# toDict前后的数据 实测相同
-# toDict化后 可以直接用x.y的形式来进行数据的访问 configs.session.secret
+# toDict前后的数据相同 但是调用方式不一样
+# toDict类化后 可以直接用x.y的形式来进行数据的访问 configs.session.secret
 #print(configs)
 configs = toDict(configs)
 #print(configs)
