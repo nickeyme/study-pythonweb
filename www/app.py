@@ -28,6 +28,7 @@ from handlers import cookie2user, COOKIE_NAME
 
 def init_jinja2(app, **kw):
     logging.info('init jinja2...')
+    # 设置前段模版字符串
     options = dict(
         autoescape = kw.get('autoescape', True),
         block_start_string = kw.get('block_start_string', '{%'),
@@ -47,6 +48,7 @@ def init_jinja2(app, **kw):
             env.filters[name] = f
     app['__templating__'] = env
 
+# 过滤去 打印日志
 async def logger_factory(app, handler):
     async def logger(request):
         logging.info('Request: %s %s' % (request.method, request.path))
@@ -54,6 +56,7 @@ async def logger_factory(app, handler):
         return (await handler(request))
     return logger
 
+'''
 async def data_factory(app, handler):
     async def parse_data(request):
         if request.method == 'POST':
@@ -65,6 +68,7 @@ async def data_factory(app, handler):
                 logging.info('request form: %s' % str(request.__data__))
         return (await handler(request))
     return parse_data
+'''
 
 # 把当前用户绑定到request上，并对URL/manage/进行拦截，检查当前用户是否是管理员身份
 # 不是管理员用户则跳转 /signin 页面，否则继续处理当前请求
@@ -83,6 +87,7 @@ async def auth_factory(app, handler):
         return (await handler(request))
     return auth
 
+# 处理所有请求后 将结果包装成 web.Response 对象进行返回
 async def response_factory(app, handler):
     async def response(request):
         logging.info('Response handler...')
@@ -122,6 +127,7 @@ async def response_factory(app, handler):
         return resp
     return response
 
+# 用于 jinjia2 前端显示
 def datetime_filter(t):
     delta = int(time.time() - t)
     if delta < 60:
@@ -139,6 +145,12 @@ def datetime_filter(t):
 middleware（中间件）是一种拦截器，一个URL在被某个函数处理前，可以经过一系列的middleware的处理。
 一个middleware可以改变URL的输入、输出，甚至可以决定不继续处理而直接返回。
 middleware的用处就在于把通用的功能从每个URL处理函数中拿出来，集中放到一个地方。
+
+middlewares 其实是一种拦截器机制，可以在处理 request 请求的前后先经过拦截器函数处理一遍，
+比如可以统一打印 request 的日志等等，它的原理就是 python 的装饰器，
+不知道装饰器的同学还请自行谷歌，middlewares 接收一个列表，
+列表的元素就是你写的拦截器函数，for 循环里以倒序分别将 url 处理函数用拦截器装饰一遍。
+最后再返回经过全部拦截器装饰过的函数。这样在你最终调用 url 处理函数之前就可以进行一些额外的处理啦。
 '''
 async def init(loop):
     await orm.create_pool(loop=loop, **configs.db) # **config.db 直接传入字典
