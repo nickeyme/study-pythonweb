@@ -4,11 +4,13 @@
 web frame 框架模块
 '''
 
-import asyncio, os, inspect, logging, functools
+import asyncio, os, inspect, logging, functools, time
 
+from datetime import datetime
 from urllib import parse
 from aiohttp import web
 from apis import APIError
+from jinja2 import Environment, FileSystemLoader
 
 '''
 将aiohttp框架进一步封装成更简明使用的web框架
@@ -45,27 +47,42 @@ def post(path):
 	return decorator
 
 #----------------inspect模块，检查视图函数的参数，使用 RequestHandler 同一组合成dict形式，传入函数------------------
+'''
+VAR_POSITIONAL：对应 *args的参数，
+KEYWORD_ONLY：对应命名关键字参数，即*，*args之后的参数
+VAR_KEYWORD：对应 **args的参数
+param.default：获取参数默认值，如果没有默认值，将被设置成Parameter.empty
+param.kind：描述参数值的属性
+'''
 
 def has_request_arg(fn):
-	' 检查函数是否有request参数，返回布尔值。若有request参数，检查该参数是否为该函数的最后一个参数，否则抛出异常 '
+	' 检查函数是否有request参数，返回布尔值。，否则抛出异常 '
 	params = inspect.signature(fn).parameters # 含有 参数名，参数 的信息
 	found = False
 	for name, param in params.items():
 		if name == 'request':
 			found = True
-			continue #退出本次循环
-		#如果找到‘request’参数后，还出现位置参数，就会抛出异常
+			continue
 		'''
-		var_positional :对应 *args的参数，
-		keyword_only：对应命名关键字参数，即*，*args之后的参数
-		var_keyword：对应 **args的参数
-		此处为判断是否有'request'参数，且该参数为可变参数、命名关键字参数、关键字参数之前的最后一个参数
+		若有request参数，则：
+		1、该参数必须为可变参数、命名关键字参数、关键字参数之前的最后一个参数（后面不能出现位置参数）
+		2、为最后一个参数
 		'''
 		if found and (param.kind != inspect.Parameter.VAR_POSITIONAL and param.kind != inspect.Parameter.KEYWORD_ONLY and param.kind != inspect.Parameter.VAR_KEYWORD):
 			raise ValueError('request parameter must be the last named parameter in function: %s%s' % (fn.__name__, str(sig)))
 	return found
 
+#收集没有默认值的命名关键字参数 必要参数
+def get_required_kw_args(fn):
+	' 将函数所有 没默认值的 命名关键字参数名 作为一个tuple返回 '
+	args = []
+	params = inspect.signature(fn).parameters
+	for name, param in params.items():
+		if param.kind == inspect.Parameter.KEYWORD_ONLY and param.default == inspect.Parameter.empty:
+			args.append(name)
+	return tuple(args)
 
+#判断有没有关键字参数
 def has_var_kw_arg(fn):
 	' 检查函数是否有关键字参数集，返回布尔值 '
 	params = inspect.signature(fn).parameters
@@ -73,7 +90,7 @@ def has_var_kw_arg(fn):
 		if param.kind == inspect.Parameter.VAR_KEYWORD:
 			return True
 
-
+#获取命名关键字参数
 def has_named_kw_args(fn):
 	' 检查函数是否有命名关键字参数，返回布尔值 '
 	params = inspect.signature(fn).parameters
@@ -81,28 +98,13 @@ def has_named_kw_args(fn):
 		if param.kind == inspect.Parameter.KEYWORD_ONLY:
 			return True
 
-
+#获取命名关键字参数
 def get_named_kw_args(fn):
 	' 将函数所有的 命名关键字参数名 作为一个tuple返回 '
 	args = []
 	params = inspect.signature(fn).parameters
 	for name, param in params.items():
 		if param.kind == inspect.Parameter.KEYWORD_ONLY:
-			args.append(name)
-	return tuple(args)
-
-#收集没有默认值的命名关键字参数 必要参数
-def get_required_kw_args(fn):
-	' 将函数所有 没默认值的 命名关键字参数名 作为一个tuple返回 '
-	args = []
-	params = inspect.signature(fn).parameters #An ordered mapping of parameters' names to the corresponding Parameter object.
-	for name, param in params.items():
-
-		if param.kind == inspect.Parameter.KEYWORD_ONLY and param.default == inspect.Parameter.empty:
-			# param.kind : describes how argument values are bound to the parameter.
-			# KEYWORD_ONLY : value must be supplied as keyword argument, which appear after a * or *args
-			# param.default : the default value for the parameter,if has no default value,this is set to Parameter.empty
-			# Parameter.empty : a special class-level marker to specify absence of default values and annotations
 			args.append(name)
 	return tuple(args)
 
@@ -129,8 +131,9 @@ class RequestHandler(object):
 		self._named_kw_args = get_named_kw_args(fn) # 将函数所有的 命名关键字参数名 作为一个tuple返回
 		self._required_kw_args = get_required_kw_args(fn) # 将函数所有 没默认值的 命名关键字参数名 作为一个tuple返回
 
+	#定义__call__()方法可以将类的实例视为函数
+	#分析请求 将处理函数需要的参数解析成字典 传入处理函数
 	async def __call__(self, request):
-		' 分析请求，request handler,must be a coroutine that accepts a request instance as its only argument and returns a streamresponse derived instance '
 		kw = None
 		if self._has_var_kw_arg or self._has_named_kw_args or self._required_kw_args:
 			# 当传入的处理函数具有 关键字参数集 或 命名关键字参数 或 request参数
@@ -147,22 +150,21 @@ class RequestHandler(object):
 						return web.HTTPBadRequest('JSON body must be object.')
 					kw = params
 				elif ct.startswith('application/x-www-form-urlencoded') or ct.startswith('multipart/form-data'):
-					# 处理表单类型的数据，传入参数字典中
+					# 处理表单类型的数据，传入参数字典中，form表单请求的编码形式
 					params = await request.post()
-					kw = dict(**params)
+					kw = dict(**params) # 直接读取post的信息，dict-like对象
 				else:
 					# 暂不支持处理其他正文类型的数据
 					return web.HTTPBadRequest('Unsupported Content-Type: %s' % request.content_type)
 			if request.method == 'GET':
-				# GET请求预处理
+				# GET请求预处理 #以字符串的形式返回url查询语句 ? 后的键值
 				qs = request.query_string
 				# 获取URL中的请求参数，如 name=Justone, id=007
 				if qs:
 					# 将请求参数传入参数字典中
 					kw = dict()
+					#解析作为字符串参数给出的查询字符串，返回字典
 					for k, v in parse.parse_qs(qs, True).items():
-						# parse a query string, data are returned as a dict. the dict keys are the unique query variable names and the values are lists of values for each name
-						# a True value indicates that blanks should be retained as blank strings
 						kw[k] = v[0]
 		if kw is None:
 			'''若request中无参数
@@ -174,17 +176,21 @@ class RequestHandler(object):
 		else:
 			# 参数字典收集请求参数
 			if not self._has_var_kw_arg and self._named_kw_args:
+    			#当视图函数没有关键字参数时，移除request中不在命名关键字参数中的参数:
 				copy = dict()
 				for name in self._named_kw_args:
 					if name in kw:
 						copy[name] = kw[name]
 				kw = copy
+			#判断url路径中是否有参数和request中内容实体的参数相同,url路径也要作为参数存入kw中
 			for k, v in request.match_info.items():
 				if k in kw:
 					logging.warning('Duplicate arg name in named arg and kw args: %s' % k)
 				kw[k] = v
+		#request实例在构造url处理函数中必不可少
 		if self._has_request_arg:
 			kw['request'] = request
+		#没有默认值的命名关键字参数不存在 抛出异常
 		if self._required_kw_args:
 			# 收集无默认值的关键字参数
 			for name in self._required_kw_args:
@@ -199,9 +205,10 @@ class RequestHandler(object):
 		except APIError as e:
 			return dict(error=e.error, data=e.data, message=e.message)
 
-
+#添加静态文件，如image,css,javascript等
 def add_static(app):
 	' 添加静态资源路径 '
+	#__file__返回当前模块的路径(如果sys.path包含当前模块则返回相对路径，否则绝对路径)
 	path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static') #获得包含'static'的绝对路径
 	# os.path.dirname(os.path.abspath(__file__)) 返回脚本所在目录的绝对路径
 	app.router.add_static('/static/', path) # 添加静态资源路径
@@ -220,7 +227,7 @@ def add_route(app, fn):
 	logging.info('add route %s %s => %s(%s)' % (method, path, fn.__name__, ', '.join(inspect.signature(fn).parameters.keys())))
 	app.router.add_route(method, path, RequestHandler(app, fn))
 
-
+#批量注册视图函数
 def add_routes(app, module_name):
 	' 自动把handler模块符合条件的函数注册 '
 	n = module_name.rfind('.')
@@ -229,7 +236,7 @@ def add_routes(app, module_name):
 		mod = __import__(module_name, globals(), locals())
 		# import一个模块，获取模块名 __name__
 	else:
-		# 添加模块属性 name，并赋值给mod。包中模块的使用
+		# 添加模块属性 name，并赋值给mod。包中模块的使用.mod.name形式
 		name = module_name[n+1:]
 		mod = getattr(__import__(module_name[:n], globals(), locals(), [name]), name)
 	for attr in dir(mod):
@@ -245,3 +252,46 @@ def add_routes(app, module_name):
 			if method and path:
 				# 对已经修饰过的URL处理函数注册到web服务的路由中
 				add_route(app, fn)
+
+def init_jinja2(app, **kw):
+    logging.info('init jinja2...')
+    # 设置前段模版字符串
+    options = dict(
+        #自动转义xml/html的特殊字符
+        autoescape = kw.get('autoescape', True),
+        #代码块的开始、结束标志
+        block_start_string = kw.get('block_start_string', '{%'),
+        block_end_string = kw.get('block_end_string', '%}'),
+        #变量的开始、结束标志
+        variable_start_string = kw.get('variable_start_string', '{{'),
+        variable_end_string = kw.get('variable_end_string', '}}'),
+        auto_reload = kw.get('auto_reload', True)
+    )
+    #获取模板文件夹路径
+    path = kw.get('path', None)
+    if path is None:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
+    logging.info('set jinja2 template path: %s' % path)
+    #Environment类是jinja2的核心类，用来保存配置、全局对象以及模板文件的路径
+	#FileSystemLoader类加载Path路径中的模板文件
+    env = Environment(loader=FileSystemLoader(path), **options)
+    #过滤器集合
+    filters = kw.get('filters', None)
+    if filters is not None:
+        for name, f in filters.items(): #filters是Enviroment类的属性：过滤器字典
+            env.filters[name] = f
+    app['__templating__'] = env #app是一个dict-like对象
+
+# 用于 jinjia2 前端显示
+def datetime_filter(t):
+    delta = int(time.time() - t)
+    if delta < 60:
+        return u'1分钟前'
+    if delta < 3600:
+        return u'%s分钟前' % (delta // 60)
+    if delta < 86400:
+        return u'%s小时前' % (delta // 3600)
+    if delta < 604800:
+        return u'%s天前' % (delta // 86400)
+    dt = datetime.fromtimestamp(t)
+    return u'%s年%s月%s日' % (dt.year, dt.month, dt.day)
