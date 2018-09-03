@@ -10,10 +10,20 @@ from urllib import parse
 from aiohttp import web
 from apis import APIError
 
+'''
+将aiohttp框架进一步封装成更简明使用的web框架
+建立视图函数装饰器，用来存储、附带URL信息，这样子便可以直接通过装饰器，将函数映射成视图函数
+例：@get
+	def View(request):
+		return response
+	但此时函数View仍未能从request请求中提取相关的参数，
+	需自行定义一个处理request请求的类来封装，并把视图函数变为协程
+'''
 
 def get(path):
 	' @get装饰器，给处理函数绑定URL和HTTP method-GET的属性 '
 	def decorator(func):
+    	#functools.wraps在装饰器中方便拷贝被装饰函数的签名(使包装的函数有__name__,__doc__属性)
 		@functools.wraps(func)
 		def wrapper(*args, **kw):
 			return func(*args, **kw)
@@ -34,6 +44,7 @@ def post(path):
 		return wrapper
 	return decorator
 
+#----------------inspect模块，检查视图函数的参数，使用 RequestHandler 同一组合成dict形式，传入函数------------------
 
 def has_request_arg(fn):
 	' 检查函数是否有request参数，返回布尔值。若有request参数，检查该参数是否为该函数的最后一个参数，否则抛出异常 '
@@ -44,6 +55,12 @@ def has_request_arg(fn):
 			found = True
 			continue #退出本次循环
 		#如果找到‘request’参数后，还出现位置参数，就会抛出异常
+		'''
+		var_positional :对应 *args的参数，
+		keyword_only：对应命名关键字参数，即*，*args之后的参数
+		var_keyword：对应 **args的参数
+		此处为判断是否有'request'参数，且该参数为可变参数、命名关键字参数、关键字参数之前的最后一个参数
+		'''
 		if found and (param.kind != inspect.Parameter.VAR_POSITIONAL and param.kind != inspect.Parameter.KEYWORD_ONLY and param.kind != inspect.Parameter.VAR_KEYWORD):
 			raise ValueError('request parameter must be the last named parameter in function: %s%s' % (fn.__name__, str(sig)))
 	return found
@@ -74,7 +91,7 @@ def get_named_kw_args(fn):
 			args.append(name)
 	return tuple(args)
 
-
+#收集没有默认值的命名关键字参数 必要参数
 def get_required_kw_args(fn):
 	' 将函数所有 没默认值的 命名关键字参数名 作为一个tuple返回 '
 	args = []
@@ -94,7 +111,11 @@ URL处理函数不一定是一个coroutine，因此我们用RequestHandler()来�
 RequestHandler是一个类，由于定义了__call__()方法，因此可以将其实例视为函数。
 RequestHandler目的就是从URL函数中分析其需要接收的参数，
 从request中获取必要的参数，调用URL函数，然后把结果转换为web.Response对象，这样，就完全符合aiohttp框架的要求：
+
+request是经aiohttp包装后的对象，其本质是一个HTTP请求，由请求状态(status)，请求首部(header)，内容实体(body)组成
+我们需要的参数包含在 内容实体 和 请求状态的URL 中
 '''
+
 class RequestHandler(object):
 	' 请求处理器，用来封装处理函数 '
 	def __init__(self, app, fn):
@@ -144,9 +165,12 @@ class RequestHandler(object):
 						# a True value indicates that blanks should be retained as blank strings
 						kw[k] = v[0]
 		if kw is None:
-			# 请求无请求参数时
+			'''若request中无参数
+				request.match_info返回dict对象，可变路由中的可变字段{variable}为参数名，传入的request请求path为值
+				例子：可变路由：/a/{name}/c，可匹配的path为：/a/jack/c的request(请求)
+				则request.match_info返回{name=jack}
+			'''
 			kw = dict(**request.match_info)
-			# Read-only property with AbstractMatchInfo instance for result of route resolving
 		else:
 			# 参数字典收集请求参数
 			if not self._has_var_kw_arg and self._named_kw_args:
