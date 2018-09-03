@@ -11,7 +11,7 @@ from apis import Page, APIValueError, APIResourceNotFoundError
 
 '''思路：前端页面带有模板，具体操作响应用后端API处理，然后返回响应的页面'''
 
-#正则匹配邮箱 SHA1
+#正则匹配邮箱 哈希
 _RE_EMAIL = re.compile(r'^[a-z0-9\.\-\_]+\@[a-z0-9\-\_]+(\.[a-z0-9\-\_]+){1,4}$')
 _RE_SHA1 = re.compile(r'^[0-9a-f]{40}$')
 #cookie名字
@@ -28,8 +28,9 @@ def check_admin(request):
 
 def user2cookie(user, max_age):
     ''' Generate cookie str by user. '''
-    # build cookie string by: id-expires-sha1
+    # cookie的过期时间
     expires = str(int(time.time() + max_age))
+    #用户cookie = ID + 密码 + 过期时间 + 密钥
     s = '%s-%s-%s-%s' % (user.id, user.passwd, expires, _COOKIE_KEY)
     L = [user.id, expires, hashlib.sha1(s.encode('utf-8')).hexdigest()]
     return '-'.join(L)
@@ -44,6 +45,7 @@ async def cookie2user(cookie_str):
         if len(L) != 3:
             return None
         uid, expires, sha1 = L
+        # 如果当前时间 > 过期时间，表示cookie已过期
         if int(expires) < time.time():
             return None
         user = await User.find(uid)
@@ -171,7 +173,7 @@ async def api_register_user(*, email, name, passwd):
     if len(users) > 0:
         raise APIError('register:failed', 'email', 'Email is already in use.')
     uid = next_id()
-    sha1_passwd = '%s:%s' % (uid, passwd)
+    sha1_passwd = '%s:%s' % (uid, passwd) # 这里的passwd已经在前端是用SHA1处理过
     user = User(id=uid, name=name.strip(), email=email, passwd=hashlib.sha1(sha1_passwd.encode('utf-8')).hexdigest(), image='http://www.gravatar.com/avatar/%s?d=mm&s=120' % hashlib.md5(email.encode('utf-8')).hexdigest())
     await user.save()
     # make session cookie:
